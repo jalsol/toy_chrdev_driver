@@ -1,15 +1,16 @@
 #include <linux/fs.h>
 #include <linux/init.h>
+#include <linux/mm.h>
 #include <linux/module.h>
 #include <linux/slab.h>
 #include <linux/uaccess.h>
+#include <linux/vmalloc.h>
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("truongnguyen");
-MODULE_DESCRIPTION("a toy character device driver");
+MODULE_DESCRIPTION("a toy character device driver with mmap (kernel-bypass)");
 
 #define DEVICE_NAME "mydevice"
-#define BUFFER_SIZE 1024
 
 static int major;
 static char *buffer;
@@ -20,6 +21,7 @@ static int mydriver_open(struct inode *, struct file *);
 static int mydriver_release(struct inode *, struct file *);
 static ssize_t mydriver_read(struct file *, char __user *, size_t, loff_t *);
 static ssize_t mydriver_write(struct file *, const char __user *, size_t, loff_t *);
+static int mydriver_mmap(struct file *, struct vm_area_struct *);
 
 static const struct file_operations fops = {
     .owner = THIS_MODULE,
@@ -27,7 +29,43 @@ static const struct file_operations fops = {
     .release = mydriver_release,
     .read = mydriver_read,
     .write = mydriver_write,
+    .mmap = mydriver_mmap,
 };
+
+static void vm_open(struct vm_area_struct *vma) {
+  printk(DEVICE_NAME ">>> vma opened\n");
+}
+
+static void vm_close(struct vm_area_struct *vma) {
+  printk(DEVICE_NAME ">>> vma closed\n");
+}
+
+static const struct vm_operations_struct vmops = {
+    .open = vm_open,
+    .close = vm_close,
+};
+
+static int mydriver_mmap(struct file *filp, struct vm_area_struct *vma) {
+  unsigned long vsize = vma->vm_end - vma->vm_start;
+
+  if (vsize > PAGE_SIZE) {
+    printk(DEVICE_NAME ">>> mmap size too large (%lu > %lu)\n", vsize, PAGE_SIZE);
+    return -EINVAL;
+  }
+
+  vma->vm_flags |= VM_SHARED | VM_MAYREAD | VM_MAYWRITE;
+  if (remap_vmalloc_range(vma, buffer, vma->vm_pgoff) < 0) {
+    printk(DEVICE_NAME ">>> remap_vmalloc_range failed\n");
+    return -EAGAIN;
+  }
+
+  vma->vm_ops = &vmops;
+  if (vma->vm_ops && vma->vm_ops->open)
+    vma->vm_ops->open(vma);
+
+  printk(DEVICE_NAME ">>> mmap mapped %lu bytes to user\n", vsize);
+  return 0;
+}
 
 static int __init mydriver_init(void) {
   major = register_chrdev(0, DEVICE_NAME, &fops);
@@ -41,7 +79,7 @@ static int __init mydriver_init(void) {
   // in practice, driver should create device automatically with `class_create` and `driver_create`
   printk(DEVICE_NAME ">>> 'mknod /dev/%s c %d 0'.\n", DEVICE_NAME, major);
 
-  buffer = kmalloc(BUFFER_SIZE, GFP_KERNEL);
+  buffer = vmalloc_user(PAGE_SIZE);
   if (!buffer) {
     unregister_chrdev(major, DEVICE_NAME);
     printk(DEVICE_NAME ">>> Failed to allocate memory for the buffer\n");
@@ -50,7 +88,7 @@ static int __init mydriver_init(void) {
 
   read_cursor = 0;
   write_cursor = 0;
-  memset(buffer, 0, BUFFER_SIZE);
+  memset(buffer, 0, PAGE_SIZE);
   printk(DEVICE_NAME ">>> Device buffer allocated successfully.\n");
 
   return 0;
@@ -58,7 +96,7 @@ static int __init mydriver_init(void) {
 
 static void __exit mydriver_exit(void) {
   if (buffer) {
-    kfree(buffer);
+    vfree(buffer);
     buffer = NULL;
   }
   unregister_chrdev(major, DEVICE_NAME);
@@ -96,11 +134,11 @@ static ssize_t mydriver_read(struct file *filep, char __user *user_buffer, size_
 static ssize_t mydriver_write(struct file *filep, const char __user *user_buffer, size_t len, loff_t *_offset) {
   size_t bytes_to_write;
 
-  if (write_cursor >= BUFFER_SIZE) {
+  if (write_cursor >= PAGE_SIZE) {
     return -ENOSPC;
   }
 
-  bytes_to_write = min(len, BUFFER_SIZE - write_cursor);
+  bytes_to_write = min(len, PAGE_SIZE - write_cursor);
 
   if (copy_from_user(buffer + write_cursor, user_buffer, bytes_to_write) != 0) {
     return -EFAULT;
