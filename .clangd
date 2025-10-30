@@ -6,3 +6,4 @@ CompileFlags:
     - -mindirect-branch-register
     - -mindirect-branch=*
     - -mpreferred-stack-boundary=*
+    - -fsanitize=bounds-strict

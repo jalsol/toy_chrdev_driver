@@ -8,7 +8,7 @@ MODULE_LICENSE("GPL");
 MODULE_AUTHOR("truongnguyen");
 MODULE_DESCRIPTION("a toy character device driver");
 
-#define DEVICE_NAME "mydevice"
+#define DEVICE_NAME "mydevice_interrupt"
 #define BUFFER_SIZE 1024
 
 static int major;
@@ -66,6 +66,8 @@ static void __exit mydriver_exit(void) {
 }
 
 static int mydriver_open(struct inode *inodep, struct file *filep) {
+  read_cursor = 0;
+  write_cursor = 0;
   printk(DEVICE_NAME ">>> Device opened.\n");
   return 0;
 }
