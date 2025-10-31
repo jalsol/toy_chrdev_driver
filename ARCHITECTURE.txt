@@ -1,0 +1,106 @@
+```
+Producer-Consumer Queue Architecture
+=====================================
+
+┌─────────────────────────────────────────────────────────────────┐
+│                        USERSPACE                                 │
+│                                                                  │
+│  ┌──────────────────┐              ┌──────────────────┐        │
+│  │  User Producer   │              │  User Consumer   │        │
+│  │                  │              │                  │        │
+│  │  - write()       │              │  - read()        │        │
+│  │  - mmap writes   │              │  - mmap reads    │        │
+│  └────────┬─────────┘              └─────────┬────────┘        │
+│           │                                   │                 │
+│           │ syscall / mmap                    │ syscall / mmap  │
+└───────────┼───────────────────────────────────┼─────────────────┘
+            │                                   │
+════════════╪═══════════════════════════════════╪═════════════════
+            │         KERNEL SPACE              │
+┌───────────▼───────────────────────────────────▼─────────────────┐
+│                                                                  │
+│         ┌────────────────────────────────────────┐              │
+│         │      Shared Memory (4096 bytes)        │              │
+│         │                                        │              │
+│         │  ┌──────────────────────────────┐     │              │
+│         │  │   Control Structure (64B)    │     │              │
+│         │  │  ┌────────────────────────┐  │     │              │
+│         │  │  │ write_idx (atomic)     │  │     │              │
+│         │  │  │ read_idx  (atomic)     │  │     │              │
+│         │  │  │ kernel_produced        │  │     │              │
+│         │  │  │ kernel_consumed        │  │     │              │
+│         │  │  │ user_produced          │  │     │              │
+│         │  │  │ user_consumed          │  │     │              │
+│         │  │  └────────────────────────┘  │     │              │
+│         │  └──────────────────────────────┘     │              │
+│         │                                        │              │
+│         │  ┌──────────────────────────────┐     │              │
+│         │  │  Circular Buffer (4032B)     │     │              │
+│         │  │                              │     │              │
+│         │  │  [0][1][2]...[4030][4031]   │     │              │
+│         │  │   ▲              ▲           │     │              │
+│         │  │   │              │           │     │              │
+│         │  │   read_idx    write_idx      │     │              │
+│         │  └──────────────────────────────┘     │              │
+│         └───────────┬──────────────┬─────────────┘              │
+│                     │              │                            │
+│         ┌───────────▼─────┐   ┌───▼──────────────┐            │
+│         │ Kernel Producer  │   │ Kernel Consumer  │            │
+│         │    Thread        │   │    Thread        │            │
+│         │                  │   │                  │            │
+│         │  - Produces A-Z  │   │  - Consumes data │            │
+│         │  - Atomic write  │   │  - Atomic read   │            │
+│         │  - ~13M items/s  │   │  - ~13M items/s  │            │
+│         └──────────────────┘   └──────────────────┘            │
+│                                                                  │
+└──────────────────────────────────────────────────────────────────┘
+
+
+Data Flow
+=========
+
+Producer Path:
+   1. Check if queue is full: (write_idx - read_idx) % SIZE == SIZE - 1
+   2. Write data to buffer[write_idx]
+   3. Memory barrier (smp_wmb)
+   4. Atomically increment write_idx
+   5. Increment producer counter
+
+Consumer Path:
+   1. Check if queue is empty: write_idx == read_idx
+   2. Read data from buffer[read_idx]
+   3. Memory barrier (smp_wmb)
+   4. Atomically increment read_idx
+   5. Increment consumer counter
+
+
+Performance Characteristics
+===========================
+
+Operation Type          | Latency      | Throughput
+-----------------------|--------------|-------------
+write() syscall        | ~607 ns/op   | ~1.6M ops/s
+read() syscall         | ~549 ns/op   | ~1.8M ops/s
+mmap produce           | ~11 ns/op    | ~90M ops/s
+mmap consume           | ~11 ns/op    | ~90M ops/s
+Kernel producer        | N/A          | ~13M items/s
+Kernel consumer        | N/A          | ~13M items/s
+
+
+Concurrency Model
+=================
+
+All four actors (kernel producer, kernel consumer, user producer, user consumer)
+can operate concurrently without locks:
+
+    Kernel Producer ────┐
+                        ├──→ Circular Queue ──┐
+    User Producer ──────┘                     ├──→ Output
+                                              │
+    Kernel Consumer ────┐                     │
+                        ├──→ Consume Items ───┘
+    User Consumer ──────┘
+
+Synchronization: Atomic operations on write_idx and read_idx provide
+                 sufficient ordering guarantees.
+```

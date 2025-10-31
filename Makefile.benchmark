@@ -2,10 +2,13 @@
 CC = g++
 CFLAGS = -std=c++20 -Wall -Wextra -O3 -march=native
 
-all: benchmark
+all: benchmark benchmark_prodcons
 
 benchmark: benchmark.cpp
 	$(CC) $(CFLAGS) -o benchmark benchmark.cpp
 
+benchmark_prodcons: benchmark_prodcons.cpp
+	$(CC) $(CFLAGS) -o benchmark_prodcons benchmark_prodcons.cpp -pthread
+
 clean:
-	rm -f benchmark
+	rm -f benchmark benchmark_prodcons

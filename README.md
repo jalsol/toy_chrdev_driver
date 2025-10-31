@@ -4,21 +4,25 @@ A performance comparison between traditional interrupt-based I/O and kernel-bypa
 
 ## Overview
 
-This project implements and benchmarks two approaches to kernel-user space data transfer:
+This project implements and benchmarks three approaches to kernel-user space data transfer:
 
 1. **Interrupt-based Driver** - Uses `copy_to_user()` / `copy_from_user()` (traditional syscalls)
 2. **Kernel-Bypass Driver** - Uses `mmap()` for direct memory access (zero-copy)
+3. **Producer-Consumer Driver** - Implements a circular queue with kernel threads producing/consuming data alongside userspace
 
 ## Repository Structure
 
 ```
 .
-├── mydriver_interrupt.c    # Traditional interrupt-based driver
-├── mydriver_bypass.c       # Kernel-bypass driver with mmap support
-├── benchmark.c             # Performance benchmark program
-├── Makefile               # Kernel module build
-├── Makefile.benchmark     # Benchmark program build
-├── run_benchmark.sh       # Automated test script
+├── mydriver_interrupt.c       # Traditional interrupt-based driver
+├── mydriver_bypass.c          # Kernel-bypass driver with mmap support
+├── mydriver_prodcons.c        # Producer-consumer driver with circular queue
+├── benchmark.cpp              # Basic performance benchmark program
+├── benchmark_prodcons.cpp     # Producer-consumer benchmark program
+├── Makefile                   # Kernel module build
+├── Makefile.benchmark         # Benchmark program build
+├── run_benchmark.sh           # Automated test script
+├── run_prodcons_benchmark.sh  # Producer-consumer benchmark script
 └── README.md
 ```
 
@@ -29,21 +33,30 @@ This project implements and benchmarks two approaches to kernel-user space data 
 make
 ```
 
-This will build both `mydriver_interrupt.ko` and `mydriver_bypass.ko`.
+This will build `mydriver_interrupt.ko`, `mydriver_bypass.ko`, and `mydriver_prodcons.ko`.
 
-### Build Benchmark Program
+### Build Benchmark Programs
 ```bash
 make -f Makefile.benchmark
 ```
 
+This will build both `benchmark` and `benchmark_prodcons` executables.
+
 ## Quick Start
 
-### Automated (Recommended)
+### Basic Benchmark (Automated - Recommended)
 ```bash
 sudo ./run_benchmark.sh
 ```
 
-This will build, load, test, and cleanup automatically.
+This will build, load, test, and cleanup automatically for the basic interrupt vs bypass comparison.
+
+### Producer-Consumer Benchmark (Automated - Recommended)
+```bash
+sudo ./run_prodcons_benchmark.sh
+```
+
+This will test the producer-consumer circular queue implementation with concurrent kernel and userspace producers/consumers.
 
 ### Manual Setup
 
@@ -84,6 +97,64 @@ sudo chmod 666 /dev/mydevice_*
 sudo rmmod mydriver_interrupt mydriver_bypass
 sudo rm /dev/mydevice_*
 ```
+
+## Producer-Consumer Queue Implementation
+
+The `mydriver_prodcons.c` driver implements a **circular queue** with concurrent producers and consumers:
+
+### Architecture
+
+- **Shared Memory Layout**: 
+  - Control structure (64 bytes): Contains atomic indices and counters
+  - Queue buffer (4032 bytes): Circular buffer for data
+  
+- **Kernel Threads**:
+  - **Producer Thread**: Continuously produces data (characters 'A'-'Z') into the queue
+  - **Consumer Thread**: Continuously consumes data from the queue
+  
+- **Userspace Access**:
+  - **Via syscalls**: Use `read()`/`write()` to consume/produce data
+  - **Via mmap**: Direct access to shared memory for zero-copy operations
+
+### Shared Control Structure
+
+```c
+struct shared_control {
+    atomic_t write_idx;         // Write position in circular buffer
+    atomic_t read_idx;          // Read position in circular buffer
+    atomic_t kernel_produced;   // Counter: items produced by kernel
+    atomic_t kernel_consumed;   // Counter: items consumed by kernel
+    atomic_t user_produced;     // Counter: items produced by userspace
+    atomic_t user_consumed;     // Counter: items consumed by userspace
+};
+```
+
+### Thread Safety
+
+- Uses atomic operations (`atomic_t`) for lock-free synchronization
+- Memory barriers (`smp_wmb()`) ensure visibility across cores
+- No spinlocks or mutexes - purely wait-free for readers/writers
+
+### Benchmark Tests
+
+The `benchmark_prodcons.cpp` program runs two tests:
+
+1. **Syscall Test**: 
+   - Userspace produces data via `write()`
+   - Kernel consumes and produces concurrently
+   - Userspace consumes via `read()`
+
+2. **mmap Test**:
+   - Userspace directly accesses shared circular queue
+   - Both userspace and kernel threads produce/consume concurrently
+   - Demonstrates zero-copy, lock-free concurrent access
+
+### Use Cases
+
+- **Message passing** between kernel and userspace
+- **Event queues** for high-frequency notifications
+- **Sensor data streaming** from kernel drivers
+- **Lock-free IPC** mechanisms
 
 ## Benchmark Details
 

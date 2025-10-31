@@ -1,4 +1,4 @@
-obj-m := mydriver_interrupt.o mydriver_bypass.o
+obj-m := mydriver_interrupt.o mydriver_bypass.o mydriver_prodcons.o
 
 KDIR := /lib/modules/$(shell uname -r)/build
 PWD := $(shell pwd)
